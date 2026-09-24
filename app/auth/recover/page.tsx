@@ -1,0 +1,3 @@
+import Link from 'next/link'
+import { AuthForm } from '@/components/auth-form'
+export default function RecoverPage() { return <main className="auth-page"><div className="auth-card"><Link className="wordmark dark-mark" href="/"><img className="wordmark-logo auth-logo" src="/images/zurura-team-safaris-logo.jpeg" alt="Zurura Team Safaris" /></Link><p className="eyebrow">Account recovery</p><h1>Find your<br /><i>way back.</i></h1><p className="auth-intro">Enter your email and we will send recovery instructions if an account exists.</p><AuthForm mode="recover" /><div className="auth-links"><Link href="/auth">Return to sign in</Link></div></div></main> }
