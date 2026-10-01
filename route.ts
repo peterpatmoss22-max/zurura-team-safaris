@@ -10,7 +10,7 @@
  * This route stays as a manual fallback for failures.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { submitEtimsInvoice } from "@/lib/etims-service";
+import { submitEtimsInvoice } from "./etims-service";
 // ⚠️ Adjust these imports to match the real Supabase admin client / auth
 // helper locations once confirmed (likely lib/supabase/admin.ts and
 // whatever helper checks the caller's 'admin' role from user_roles).
