@@ -1,28 +1,35 @@
-/**
- * eTIMS (KRA Electronic Tax Invoice Management System) integration — OSCU flavor.
- *
- * ⚠️ SCAFFOLD, NOT WIRED UP YET. This mirrors the shape of lib/payment-service.ts:
- * the plumbing is here, but it has not been pointed at a real KRA sandbox/prod
- * environment or tested against the actual OSCU API responses.
- *
- * Confirm against the official OSCU Specification before relying on this in production:
- * https://www.kra.go.ke/images/publications/OSCU_Specification_Document_v2.0.pdf
- *
- * NOTE: OSCU and VSCU are different KRA integration types with different
- * endpoints/payloads. If it turns out this business needs VSCU instead
- * (e.g. because invoicing already happens in separate accounting software),
- * this file needs to be redone against the VSCU spec, not just reconfigured.
- */
-
 export type EtimsMode = "sandbox" | "production";
 
 export interface EtimsConfig {
   mode: EtimsMode;
   baseUrl: string;
-  kraPin: string; // Taxpayer's KRA PIN
-  branchId: string; // KRA branch/office code, e.g. "00"
-  unitId: string; // OSCU device/unit ID issued by KRA at registration
-  cmcKey: string; // CMC key issued by KRA during device initialization
+  kraPin: string;
+  branchId: string;
+  unitId: string;
+  cmcKey: string;
+}
+
+export interface EtimsInvoiceItem {
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  taxRate: number;
+}
+
+export interface EtimsInvoiceInput {
+  bookingId: string;
+  buyerName: string;
+  buyerPin?: string;
+  items: EtimsInvoiceItem[];
+  currency?: string;
+}
+
+export interface EtimsInvoiceResult {
+  success: boolean;
+  kraInvoiceNumber?: string;
+  qrCodeUrl?: string;
+  rawResponse: unknown;
+  error?: string;
 }
 
 export function getEtimsConfig(): EtimsConfig {
@@ -36,43 +43,21 @@ export function getEtimsConfig(): EtimsConfig {
     cmcKey: process.env.ETIMS_CMC_KEY,
   };
 
-  for (const [key, value] of Object.entries(required)) {
-    if (!value) {
-      throw new Error(`Missing required eTIMS env var for ${key}`);
-    }
+  const missing = Object.entries(required)
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+
+  if (missing.length > 0) {
+    throw new Error(`Missing required eTIMS env var(s): ${missing.join(", ")}`);
   }
 
-  return { mode, ...(required as Omit<EtimsConfig, "mode">) };
-}
-
-export interface EtimsInvoiceItem {
-  description: string; // e.g. "Great Migration Safari Package — 5D4N"
-  quantity: number;
-  unitPrice: number; // in KES, before tax
-  taxRate: number; // e.g. 0.16 for standard 16% VAT; 0 for exempt/zero-rated
-}
-
-export interface EtimsInvoiceInput {
-  bookingId: string;
-  buyerName: string;
-  buyerPin?: string; // optional — only required for B2B invoices
-  items: EtimsInvoiceItem[];
-  currency?: string; // defaults to KES
-}
-
-export interface EtimsInvoiceResult {
-  success: boolean;
-  kraInvoiceNumber?: string;
-  qrCodeUrl?: string;
-  rawResponse: unknown;
-  error?: string;
+  return {
+    mode,
+    ...(required as Omit<EtimsConfig, "mode">),
+  };
 }
 
 function buildInvoicePayload(input: EtimsInvoiceInput, config: EtimsConfig) {
-  // ⚠️ Field names below are illustrative, based on the general shape of the
-  // OSCU spec (taxpayer PIN, branch, item lines with tax rate codes, totals).
-  // They have NOT been verified against the actual OSCU request schema —
-  // cross-check every field name against the spec PDF before going live.
   const items = input.items.map((item) => ({
     description: item.description,
     quantity: item.quantity,
@@ -82,8 +67,8 @@ function buildInvoicePayload(input: EtimsInvoiceInput, config: EtimsConfig) {
     total: item.quantity * item.unitPrice * (1 + item.taxRate),
   }));
 
-  const totalTaxable = items.reduce((sum, i) => sum + i.quantity * i.unitPrice, 0);
-  const totalTax = items.reduce((sum, i) => sum + i.taxAmount, 0);
+  const totalTaxable = items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+  const totalTax = items.reduce((sum, item) => sum + item.taxAmount, 0);
 
   return {
     kraPin: config.kraPin,
@@ -104,33 +89,42 @@ function buildInvoicePayload(input: EtimsInvoiceInput, config: EtimsConfig) {
   };
 }
 
-/**
- * Submit a confirmed booking as a tax invoice to KRA via eTIMS OSCU.
- *
- * Intended call site: after a booking's payment is confirmed (i.e. alongside
- * or just after whatever marks payment_records as 'completed' in
- * app/api/payments/webhook/route.ts). Not wired into that route yet.
- */
 export async function submitEtimsInvoice(
-  input: EtimsInvoiceInput
+  input: EtimsInvoiceInput,
 ): Promise<EtimsInvoiceResult> {
-  const config = getEtimsConfig();
+  let config: EtimsConfig;
+
+  try {
+    config = getEtimsConfig();
+  } catch (error) {
+    return {
+      success: false,
+      rawResponse: null,
+      error: error instanceof Error ? error.message : "Missing eTIMS configuration",
+    };
+  }
+
   const payload = buildInvoicePayload(input, config);
 
   try {
-    const response = await fetch(`${config.baseUrl}/invoices`, {
+    const baseUrl = config.baseUrl.replace(/\/+$/, "");
+    const response = await fetch(`${baseUrl}/invoices`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        // ⚠️ Confirm the actual auth header shape required by OSCU —
-        // some integrations use the CMC key as a bearer token, others
-        // require it signed into the payload itself. Verify against spec.
         Authorization: `Bearer ${config.cmcKey}`,
+        "X-Unit-Id": config.unitId,
       },
       body: JSON.stringify(payload),
     });
 
-    const rawResponse = await response.json().catch(() => null);
+    let rawResponse: unknown = null;
+    const responseText = await response.text();
+    try {
+      rawResponse = JSON.parse(responseText);
+    } catch {
+      rawResponse = responseText;
+    }
 
     if (!response.ok) {
       return {
@@ -140,10 +134,20 @@ export async function submitEtimsInvoice(
       };
     }
 
+    const invoiceNumber =
+      typeof rawResponse === "object" && rawResponse && "invoiceNumber" in rawResponse
+        ? (rawResponse as { invoiceNumber?: string }).invoiceNumber
+        : undefined;
+
+    const qrCodeUrl =
+      typeof rawResponse === "object" && rawResponse && "qrCodeUrl" in rawResponse
+        ? (rawResponse as { qrCodeUrl?: string }).qrCodeUrl
+        : undefined;
+
     return {
       success: true,
-      kraInvoiceNumber: rawResponse?.invoiceNumber,
-      qrCodeUrl: rawResponse?.qrCodeUrl,
+      kraInvoiceNumber: invoiceNumber,
+      qrCodeUrl,
       rawResponse,
     };
   } catch (err) {
