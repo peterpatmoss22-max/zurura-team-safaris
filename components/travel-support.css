@@ -1,0 +1,145 @@
+/* Travel Support */
+
+.travel-support-section {
+  padding: 110px 0;
+  background: var(--sage, #dfe3d8);
+}
+
+.travel-support-inner {
+  width: min(1120px, calc(100% - 64px));
+  margin: 0 auto;
+}
+
+.travel-support-section h2 {
+  max-width: 720px;
+  margin: 0 0 22px;
+  color: var(--deep, #172a21);
+  font-family: 'DM Serif Display', Georgia, serif;
+  font-size: clamp(42px, 6vw, 78px);
+  font-weight: 400;
+  line-height: 0.95;
+  letter-spacing: -0.04em;
+}
+
+.travel-support-intro {
+  max-width: 620px;
+  margin: 0 0 44px;
+  color: var(--muted-foreground, #69736b);
+  line-height: 1.75;
+}
+
+.travel-support-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.travel-support-card {
+  display: flex;
+  flex-direction: column;
+  padding: 34px;
+  background: var(--background, #f5f1e8);
+  border: 1px solid var(--border, rgba(38, 54, 45, 0.16));
+}
+
+.travel-support-card-label {
+  margin: 0 0 24px;
+  color: var(--terracotta, #b86447);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.travel-support-card h3 {
+  margin: 0 0 14px;
+  color: var(--deep, #172a21);
+  font-family: 'DM Serif Display', Georgia, serif;
+  font-size: 38px;
+  font-weight: 400;
+  line-height: 1.1;
+}
+
+.travel-support-card p:not(.travel-support-card-label) {
+  min-height: 104px;
+  margin: 0;
+  color: var(--muted-foreground, #69736b);
+  line-height: 1.7;
+}
+
+.travel-support-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  margin-top: 26px;
+}
+
+.travel-support-actions .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-decoration: none;
+}
+
+.travel-support-phone {
+  color: var(--primary, #214837);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  text-decoration: none;
+}
+
+.travel-support-phone:hover {
+  text-decoration: underline;
+}
+
+.travel-support-disclaimer {
+  max-width: 760px;
+  margin: 26px 0 0;
+  color: var(--muted-foreground, #69736b);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+@media (max-width: 720px) {
+  .travel-support-section {
+    padding: 76px 0;
+  }
+
+  .travel-support-inner {
+    width: min(calc(100% - 40px), 560px);
+  }
+
+  .travel-support-section h2 {
+    font-size: clamp(40px, 12vw, 58px);
+  }
+
+  .travel-support-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .travel-support-card {
+    padding: 26px;
+  }
+
+  .travel-support-card p:not(.travel-support-card-label) {
+    min-height: 0;
+  }
+
+  .travel-support-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .travel-support-actions .button {
+    min-height: 48px;
+  }
+
+  .travel-support-actions .button,
+  .travel-support-phone {
+    width: 100%;
+  }
+}
