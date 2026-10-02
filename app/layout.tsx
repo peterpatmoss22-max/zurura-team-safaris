@@ -10,7 +10,7 @@ export const metadata: Metadata = {
     default: 'Zurura Team Safaris | Private Kenya Safaris',
     template: '%s | Zurura Team Safaris',
     icons: {
-      icon:'favicon.png',
+      icon: 'favicon.ico',
     },
   },
   description: 'Private and small-group Kenya safaris planned by people who know the Mara, Samburu, Amboseli, Tsavo, and the coast.',
