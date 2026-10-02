@@ -1,5 +1,6 @@
 'use client'
 
+import StarRating from './star-rating';
 import { WhatsAppCta } from '@/components/whatsapp-cta'
 
 const vehicles = [
@@ -41,6 +42,7 @@ export function CarHireSection() {
               <p className="card-meta">Available on enquiry</p>
               <h3>{vehicle.label}</h3>
               <p>{vehicle.description}</p>
+              <StarRating totalStars={5} />
               <WhatsAppCta label="Enquire about car hire" carHireType={vehicle.label} />
             </div>
           </article>
