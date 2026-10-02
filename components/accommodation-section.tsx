@@ -1,5 +1,6 @@
 'use client'
 
+import StarRating from './star-rating';
 import { WhatsAppCta } from './whatsapp-cta'
 
 const accommodations = [
@@ -44,6 +45,7 @@ export function AccommodationSection() {
               style={{ backgroundImage: `url(${accommodation.image})` }}
             />
             <div className="accommodation-content">
+              <StarRating totalStars={5} />
               <WhatsAppCta
                 label="Enquire about accommodation"
                 accommodationType="selected accommodation"
