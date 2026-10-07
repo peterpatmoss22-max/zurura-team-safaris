@@ -80,8 +80,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Payment recorded but booking update failed." }, { status: 500 });
   }
 
-  // TODO: ETIMS invoice submission disabled — will return in future update
-  // if (status === "paid") { ... }
+  // ETIMS invoice submission temporarily disabled.
+  // Re-enable in a future update when the integration is ready.
 
   return NextResponse.json({ received: true, paymentId, status: status as PaymentStatus });
 }
