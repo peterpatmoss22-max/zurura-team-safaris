@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { providerEventStatus, type PaymentStatus } from "@/lib/payment-service";
-import { submitEtimsInvoice } from "@/lib/etims-service";
 
 function validSignature(rawBody: string, signature: string | null) {
   const secret = process.env.PAYMENT_WEBHOOK_SECRET;
@@ -81,55 +80,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Payment recorded but booking update failed." }, { status: 500 });
   }
 
-  if (status === "paid") {
-    const { data: booking } = await supabase
-      .from("bookings")
-      .select("id, user_id, total_amount, customer_name, safari_package_id")
-      .eq("id", payment.booking_id)
-      .maybeSingle();
-
-    if (booking) {
-      const { data: safariPackage } = await supabase
-        .from("safari_packages")
-        .select("title")
-        .eq("id", booking.safari_package_id)
-        .maybeSingle();
-
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("full_name, kra_pin")
-        .eq("id", booking.user_id)
-        .maybeSingle();
-
-      const result = await submitEtimsInvoice({
-        bookingId: booking.id,
-        buyerName: booking.customer_name || profile?.full_name || "Safari customer",
-        buyerPin: profile?.kra_pin ?? undefined,
-        items: [
-          {
-            description: safariPackage?.title || "Safari booking",
-            quantity: 1,
-            unitPrice: Number(booking.total_amount || 0),
-            taxRate: 0.16,
-          },
-        ],
-      });
-
-      await supabase.from("etims_invoices").upsert(
-        {
-          booking_id: booking.id,
-          kra_invoice_number: result.kraInvoiceNumber ?? null,
-          qr_code_url: result.qrCodeUrl ?? null,
-          status: result.success ? "submitted" : "failed",
-          error_message: result.error ?? null,
-          raw_response: result.rawResponse,
-          submitted_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "booking_id" },
-      );
-    }
-  }
+  // TODO: ETIMS invoice submission disabled — will return in future update
+  // if (status === "paid") { ... }
 
   return NextResponse.json({ received: true, paymentId, status: status as PaymentStatus });
 }
