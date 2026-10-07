@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { providerEventStatus, type PaymentStatus } from "@/lib/payment-service";
-import { submitEtimsInvoice } from "../../../etims-service";
+import { submitEtimsInvoice } from "@/etims-service";
 
 function validSignature(rawBody: string, signature: string | null) {
   const secret = process.env.PAYMENT_WEBHOOK_SECRET;
