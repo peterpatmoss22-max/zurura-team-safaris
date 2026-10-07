@@ -9,13 +9,13 @@ export const metadata: Metadata = {
   title: {
     default: 'Zurura Team Safaris | Private Kenya Safaris',
     template: '%s | Zurura Team Safaris',
-    icons: {
-      icon: 'favicon.ico',
-    },
   },
   description: 'Private and small-group Kenya safaris planned by people who know the Mara, Samburu, Amboseli, Tsavo, and the coast.',
   keywords: ['Kenya safari', 'private safari Kenya', 'Masai Mara safari', 'Samburu safari', 'family safari Kenya'],
   alternates: { canonical: '/' },
+  icons: {
+    icon: '/favicon.ico',
+  },
   openGraph: {
     type: 'website',
     url: '/',
@@ -31,7 +31,7 @@ export const metadata: Metadata = {
   },
   robots: { index: true, follow: true },
   generator: 'v0.app',
-} 
+}
 
 const organizationSchema = {
   '@context': 'https://schema.org',
