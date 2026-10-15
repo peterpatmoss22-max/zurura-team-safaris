@@ -27,6 +27,4 @@ PGP public key (optional)
 
 [Add project PGP public key here if you want encrypted reports]
 
------END PGP PUBLIC KEY BLOCK-----
-
-Thank you for helping keep this project secure.
+-----END PGP PUBLIC KEY BLOCK---
