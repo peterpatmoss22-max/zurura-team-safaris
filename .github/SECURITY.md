@@ -2,11 +2,20 @@
 
 Thanks for your interest in reporting a security issue in Zurura Team Safaris.
 
-If you've found a vulnerability, please do not open a public issue. Instead, contact the maintainers privately so we can investigate and remediate.
+If you've found a vulnerability, please do not open a public issue. Instead,
+we prefer receiving private reports via GitHub Security Advisories or by
+contacting the maintainers directly.
 
-Reporting
-- Email: security@zururateamsafaris.example (replace with a real contact address)
-- PGP: (optional) Upload an encrypted report to the repository or send an encrypted email using the project's PGP key below.
+Reporting options
+
+1. Create a private GitHub Security Advisory for this repository:
+   https://github.com/peterpatmoss22-max/zurura-team-safaris/security/advisories
+
+2. Contact the maintainers via their GitHub account:
+   - @peterpatmoss22-max — https://github.com/peterpatmoss22-max
+
+If you need to send an encrypted report by email, please contact the maintainer
+via their GitHub profile to request a preferred secure channel or PGP key.
 
 What to include
 - A clear description of the vulnerability and its impact
@@ -21,12 +30,5 @@ Response policy
 
 Supported versions
 - We support the latest release on the default branch. If you are reporting an issue in a fork or custom deployment, please tell us how to reproduce it.
-
-PGP public key (optional)
------BEGIN PGP PUBLIC KEY BLOCK-----
-
-[Add project PGP public key here if you want encrypted reports]
-
------END PGP PUBLIC KEY BLOCK-----
 
 Thank you for helping keep this project secure.
