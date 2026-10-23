@@ -161,7 +161,7 @@ export default function Page() {
         <div className="intro-copy"><p className="eyebrow">A different kind of safari</p><h2 id="intro-title">Come for the wildlife.<br /><i>Leave with a story.</i></h2><p>A good safari leaves room for the unexpected. We take the time to watch the light change, listen to our guides, and stay with the moments you will talk about long after you return.</p><a className="text-link" href="#story">Discover our approach <span>↗</span></a></div>
       </section>
 
-      <section className="stats-strip"><div className="container stats"><div><strong>16</strong><span>years in the field</span></div><div><strong>28</strong><span>conservation partners</span></div><div><strong>4.9</strong><span>guest rating</span></div><div><strong>100%</strong><span>locally owned</span></div></div></section>
+      <section className="stats-strip"><div className="container stats"><div><strong>6</strong><span>years in the field</span></div><div><strong>4</strong><span>conservation partners</span></div><div><strong>4.9</strong><span>guest rating</span></div><div><strong>100%</strong><span>locally owned</span></div></div></section>
 
       <section className="journeys section container" id="journeys">
         <div className="section-heading"><div><p className="eyebrow">Find your wild</p><h2>Journeys worth<br /><i>remembering.</i></h2></div><p>These itineraries are starting points, not set menus. Tell us how you like to travel and we will shape the route around you.</p></div>
