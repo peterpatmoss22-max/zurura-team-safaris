@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 
-export type PaymentMethod = 'mpesa' | 'card' | 'bank_transfer' | 'other'
+export type PaymentMethod = 'mpesa' | 'card' | 'bank_transfer' | 'other' | 'paystack'
 export type PaymentStatus = 'pending' | 'processing' | 'paid' | 'failed' | 'cancelled' | 'refunded'
 
 export type PaymentRequest = {
@@ -27,16 +27,31 @@ export async function createPendingPayment({ bookingId, method }: PaymentRequest
   if (bookingError || !booking) return { error: 'Booking not found.', status: 404 as const }
   if (booking.payment_status === 'paid') return { error: 'This booking has already been paid.', status: 409 as const }
 
+  const provider = method === 'paystack'
+    ? 'paystack'
+    : paymentMode() === 'test'
+      ? 'test'
+      : method === 'mpesa'
+        ? 'mpesa'
+        : method === 'card'
+          ? 'card'
+          : method === 'bank_transfer'
+            ? 'bank_transfer'
+            : 'other'
+
   const { data: payment, error } = await supabase
     .from('payment_records')
     .insert({
       booking_id: booking.id,
       amount: booking.total_amount ?? 0,
-      currency: booking.currency ?? 'USD',
+      currency: booking.currency ?? 'KES',
       payment_method: method,
       payment_status: 'pending',
-      provider: paymentMode() === 'test' ? 'test' : method === 'mpesa' ? 'mpesa' : 'card',
-      metadata: { mode: paymentMode() },
+      provider,
+      metadata: {
+        mode: paymentMode(),
+        provider: method === 'paystack' ? 'paystack' : provider,
+      },
     })
     .select('id, booking_id, amount, currency, payment_method, payment_status, provider, created_at')
     .single()
@@ -60,11 +75,17 @@ export async function applyVerifiedPaymentUpdate(paymentId: string, status: Paym
     .eq('id', paymentId)
     .select('id, booking_id, payment_status')
     .single()
+
   if (error || !payment) return { error: 'Payment record not found.', status: 404 as const }
 
   const bookingStatus = status === 'paid' ? 'confirmed' : status === 'cancelled' ? 'cancelled' : status === 'failed' ? 'pending' : 'pending'
   const paymentStatus = status === 'paid' ? 'paid' : status
-  const { error: bookingError } = await supabase.from('bookings').update({ status: bookingStatus, payment_status: paymentStatus, updated_at: new Date().toISOString() }).eq('id', payment.booking_id)
+
+  const { error: bookingError } = await supabase
+    .from('bookings')
+    .update({ status: bookingStatus, payment_status: paymentStatus, updated_at: new Date().toISOString() })
+    .eq('id', payment.booking_id)
+
   if (bookingError) return { error: 'Payment was recorded but booking status could not be updated.', status: 500 as const }
   return { payment, status: 200 as const }
 }

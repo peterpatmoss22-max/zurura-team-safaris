@@ -1,83 +1,154 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
-import { createPendingPayment, type PaymentMethod } from '@/lib/payment-service'
-import { initializePaystackTransaction } from '@/lib/paystack'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { providerEventStatus, type PaymentStatus } from '@/lib/payment-service'
+import { verifyPaystackSignature } from '@/lib/paystack'
 
-const methods = new Set<PaymentMethod>(['mpesa', 'card', 'bank_transfer', 'other', 'paystack'])
+function validLegacySignature(rawBody: string, signature: string | null) {
+  const secret = process.env.PAYMENT_WEBHOOK_SECRET
+  if (!secret || !signature) return false
+
+  const expected = require('node:crypto').createHmac('sha256', secret).update(rawBody).digest('hex')
+  const provided = signature.replace(/^sha256=/, '')
+
+  if (provided.length !== expected.length) return false
+  return require('node:crypto').timingSafeEqual(Buffer.from(expected), Buffer.from(provided))
+}
 
 export async function POST(request: Request) {
-  const body = await request.json().catch(() => null)
-  const bookingId = body && typeof body.bookingId === 'string' ? body.bookingId : ''
-  const method = body && typeof body.method === 'string' && methods.has(body.method as PaymentMethod) ? body.method as PaymentMethod : null
+  const rawBody = await request.text()
+  const paystackSignature = request.headers.get('x-paystack-signature')
+  const legacySignature = request.headers.get('x-payment-signature')
 
-  if (!bookingId || !method) {
-    return NextResponse.json({ error: 'Choose a valid booking and payment method.' }, { status: 400 })
-  }
+  if (paystackSignature && verifyPaystackSignature(rawBody, paystackSignature)) {
+    let payload: { event?: string; data?: { reference?: string; status?: string } } = {}
 
-  if (method === 'paystack' && !process.env.PAYSTACK_SECRET_KEY) {
-    return NextResponse.json({ error: 'Paystack is not configured on this server.' }, { status: 500 })
-  }
-
-  const result = await createPendingPayment({ bookingId, method })
-  if ('error' in result) return NextResponse.json({ error: result.error }, { status: result.status })
-
-  if (method === 'paystack') {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    const { data: booking } = await supabase
-      .from('bookings')
-      .select('id, total_amount, currency')
-      .eq('id', bookingId)
-      .eq('user_id', user?.id ?? '')
-      .maybeSingle()
-
-    const amountInKobo = Math.max(1, Math.round((Number(booking?.total_amount ?? result.payment.amount ?? 0) * 100)))
-    const paystack = await initializePaystackTransaction({
-      amount: amountInKobo,
-      email: user?.email ?? 'customer@example.com',
-      reference: `zts-${result.payment.id}`,
-      currency: booking?.currency ?? 'KES',
-      bookingId,
-    })
-
-    if ('error' in paystack) {
-      await supabase.from('payment_records').update({
-        payment_status: 'failed',
-        metadata: {
-          mode: process.env.PAYMENT_MODE === 'live' ? 'live' : 'test',
-          paystack: { error: paystack.error },
-        },
-      }).eq('id', result.payment.id)
-
-      return NextResponse.json({ error: paystack.error }, { status: paystack.status })
+    try {
+      payload = JSON.parse(rawBody) as { event?: string; data?: { reference?: string; status?: string } }
+    } catch {
+      return NextResponse.json({ error: 'Invalid Paystack payload.' }, { status: 400 })
     }
 
-    await supabase.from('payment_records').update({
-      provider: 'paystack',
-      transaction_reference: paystack.data.reference,
-      metadata: {
-        mode: process.env.PAYMENT_MODE === 'live' ? 'live' : 'test',
-        paystack: {
-          access_code: paystack.data.access_code,
-          authorization_url: paystack.data.authorization_url,
-          reference: paystack.data.reference,
-          amount: amountInKobo,
-        },
-      },
-    }).eq('id', result.payment.id)
+    const event = typeof payload.event === 'string' ? payload.event : ''
+    const reference = typeof payload.data?.reference === 'string' ? payload.data.reference : ''
+    const status = payload.data?.status === 'success' || event === 'charge.success' ? 'paid' : payload.data?.status === 'failed' ? 'failed' : null
 
-    return NextResponse.json({
-      payment: result.payment,
-      mode: result.mode,
-      reference: paystack.data.reference,
-      authorization_url: paystack.data.authorization_url,
-      message: 'Paystack checkout initialized successfully.',
-    }, { status: 201 })
+    if (!reference || !status) {
+      return NextResponse.json({ received: true, ignored: true, event }, { status: 200 })
+    }
+
+    const supabase = createAdminClient()
+    const { data: payment, error: paymentLookupError } = await supabase
+      .from('payment_records')
+      .select('id, booking_id, payment_status')
+      .eq('transaction_reference', reference)
+      .maybeSingle()
+
+    if (paymentLookupError) {
+      return NextResponse.json({ error: 'Payment lookup failed.' }, { status: 500 })
+    }
+
+    if (!payment) {
+      return NextResponse.json({ error: 'Payment not found.' }, { status: 404 })
+    }
+
+    if (payment.payment_status === status) {
+      return NextResponse.json({ received: true, paymentId: payment.id, status: status as PaymentStatus, duplicate: true })
+    }
+
+    const { error: paymentError } = await supabase
+      .from('payment_records')
+      .update({
+        payment_status: status,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', payment.id)
+
+    if (paymentError) {
+      return NextResponse.json({ error: 'Payment event could not be recorded.' }, { status: 500 })
+    }
+
+    const bookingStatus = status === 'paid' ? 'confirmed' : 'pending'
+    const { error: bookingError } = await supabase
+      .from('bookings')
+      .update({
+        status: bookingStatus,
+        payment_status: status,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', payment.booking_id)
+
+    if (bookingError) {
+      return NextResponse.json({ error: 'Payment recorded but booking update failed.' }, { status: 500 })
+    }
+
+    return NextResponse.json({ received: true, paymentId: payment.id, status: status as PaymentStatus, reference })
   }
 
-  return NextResponse.json({
-    payment: result.payment,
-    mode: result.mode,
-    message: result.mode === 'test' ? 'Payment is ready in safe test mode. No money was charged.' : 'Payment started. Complete the payment flow.',
-  }, { status: 201 })
+  if (legacySignature && validLegacySignature(rawBody, legacySignature)) {
+    let body: { paymentId?: unknown; status?: unknown; reference?: unknown }
+
+    try {
+      body = JSON.parse(rawBody) as { paymentId?: unknown; status?: unknown; reference?: unknown }
+    } catch {
+      return NextResponse.json({ error: 'Invalid payment event payload.' }, { status: 400 })
+    }
+
+    const paymentId = typeof body.paymentId === 'string' ? body.paymentId : ''
+    const status = providerEventStatus(body.status)
+    const reference = typeof body.reference === 'string' ? body.reference.slice(0, 120) : undefined
+
+    if (!paymentId || !status) {
+      return NextResponse.json({ error: 'Invalid payment event.' }, { status: 400 })
+    }
+
+    const supabase = createAdminClient()
+    const { data: payment, error: paymentLookupError } = await supabase
+      .from('payment_records')
+      .select('id, booking_id, payment_status')
+      .eq('id', paymentId)
+      .maybeSingle()
+
+    if (paymentLookupError) {
+      return NextResponse.json({ error: 'Payment lookup failed.' }, { status: 500 })
+    }
+
+    if (!payment) {
+      return NextResponse.json({ error: 'Payment not found.' }, { status: 404 })
+    }
+
+    if (payment.payment_status === status) {
+      return NextResponse.json({ received: true, paymentId, status: status as PaymentStatus, duplicate: true })
+    }
+
+    const { error: paymentError } = await supabase
+      .from('payment_records')
+      .update({
+        payment_status: status,
+        transaction_reference: reference || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', paymentId)
+
+    if (paymentError) {
+      return NextResponse.json({ error: 'Payment event could not be recorded.' }, { status: 500 })
+    }
+
+    const bookingStatus = status === 'paid' ? 'confirmed' : status === 'cancelled' ? 'cancelled' : 'pending'
+    const { error: bookingError } = await supabase
+      .from('bookings')
+      .update({
+        status: bookingStatus,
+        payment_status: status,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', payment.booking_id)
+
+    if (bookingError) {
+      return NextResponse.json({ error: 'Payment recorded but booking update failed.' }, { status: 500 })
+    }
+
+    return NextResponse.json({ received: true, paymentId, status: status as PaymentStatus })
+  }
+
+  return NextResponse.json({ error: 'Invalid webhook signature.' }, { status: 401 })
 }

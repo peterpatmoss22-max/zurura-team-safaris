@@ -1,91 +1,83 @@
+import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { createPendingPayment, type PaymentMethod } from '@/lib/payment-service'
+import { initializePaystackTransaction } from '@/lib/paystack'
 
-export type PaymentMethod = 'mpesa' | 'card' | 'bank_transfer' | 'other' | 'paystack'
-export type PaymentStatus = 'pending' | 'processing' | 'paid' | 'failed' | 'cancelled' | 'refunded'
+const methods = new Set<PaymentMethod>(['mpesa', 'card', 'bank_transfer', 'other', 'paystack'])
 
-export type PaymentRequest = {
-  bookingId: string
-  method: PaymentMethod
-}
+export async function POST(request: Request) {
+  const body = await request.json().catch(() => null)
+  const bookingId = body && typeof body.bookingId === 'string' ? body.bookingId : ''
+  const method = body && typeof body.method === 'string' && methods.has(body.method as PaymentMethod) ? body.method as PaymentMethod : null
 
-export function paymentMode() {
-  return process.env.PAYMENT_MODE === 'live' ? 'live' : 'test'
-}
+  if (!bookingId || !method) {
+    return NextResponse.json({ error: 'Choose a valid booking and payment method.' }, { status: 400 })
+  }
 
-export async function createPendingPayment({ bookingId, method }: PaymentRequest) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'Authentication required.', status: 401 as const }
+  if (method === 'paystack' && !process.env.PAYSTACK_SECRET_KEY) {
+    return NextResponse.json({ error: 'Paystack is not configured on this server.' }, { status: 500 })
+  }
 
-  const { data: booking, error: bookingError } = await supabase
-    .from('bookings')
-    .select('id, user_id, total_amount, currency, status, payment_status')
-    .eq('id', bookingId)
-    .eq('user_id', user.id)
-    .maybeSingle()
+  const result = await createPendingPayment({ bookingId, method })
+  if ('error' in result) return NextResponse.json({ error: result.error }, { status: result.status })
 
-  if (bookingError || !booking) return { error: 'Booking not found.', status: 404 as const }
-  if (booking.payment_status === 'paid') return { error: 'This booking has already been paid.', status: 409 as const }
+  if (method === 'paystack') {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    const { data: booking } = await supabase
+      .from('bookings')
+      .select('id, total_amount, currency')
+      .eq('id', bookingId)
+      .eq('user_id', user?.id ?? '')
+      .maybeSingle()
 
-  const provider = method === 'paystack'
-    ? 'paystack'
-    : paymentMode() === 'test'
-      ? 'test'
-      : method === 'mpesa'
-        ? 'mpesa'
-        : method === 'card'
-          ? 'card'
-          : method === 'bank_transfer'
-            ? 'bank_transfer'
-            : 'other'
-
-  const { data: payment, error } = await supabase
-    .from('payment_records')
-    .insert({
-      booking_id: booking.id,
-      amount: booking.total_amount ?? 0,
-      currency: booking.currency ?? 'KES',
-      payment_method: method,
-      payment_status: 'pending',
-      provider,
-      metadata: {
-        mode: paymentMode(),
-        provider: method === 'paystack' ? 'paystack' : provider,
-      },
+    const amountInKobo = Math.max(1, Math.round((Number(booking?.total_amount ?? result.payment.amount ?? 0) * 100)))
+    const paystack = await initializePaystackTransaction({
+      amount: amountInKobo,
+      email: user?.email ?? 'customer@example.com',
+      reference: `zts-${result.payment.id}`,
+      currency: booking?.currency ?? 'KES',
+      bookingId,
     })
-    .select('id, booking_id, amount, currency, payment_method, payment_status, provider, created_at')
-    .single()
 
-  if (error) return { error: 'We could not start payment. Please try again.', status: 500 as const }
+    if ('error' in paystack) {
+      await supabase.from('payment_records').update({
+        payment_status: 'failed',
+        metadata: {
+          mode: process.env.PAYMENT_MODE === 'live' ? 'live' : 'test',
+          paystack: { error: paystack.error },
+        },
+      }).eq('id', result.payment.id)
 
-  await supabase.from('bookings').update({ payment_status: 'pending', status: 'pending' }).eq('id', booking.id).eq('user_id', user.id)
-  return { payment, mode: paymentMode(), status: 201 as const }
-}
+      return NextResponse.json({ error: paystack.error }, { status: paystack.status })
+    }
 
-export function providerEventStatus(value: unknown): PaymentStatus | null {
-  if (value === 'paid' || value === 'processing' || value === 'failed' || value === 'cancelled' || value === 'refunded' || value === 'pending') return value
-  return null
-}
+    await supabase.from('payment_records').update({
+      provider: 'paystack',
+      transaction_reference: paystack.data.reference,
+      metadata: {
+        mode: process.env.PAYMENT_MODE === 'live' ? 'live' : 'test',
+        paystack: {
+          access_code: paystack.data.access_code,
+          authorization_url: paystack.data.authorization_url,
+          reference: paystack.data.reference,
+          amount: amountInKobo,
+        },
+      },
+    }).eq('id', result.payment.id)
 
-export async function applyVerifiedPaymentUpdate(paymentId: string, status: PaymentStatus, reference?: string) {
-  const supabase = await createClient()
-  const { data: payment, error } = await supabase
-    .from('payment_records')
-    .update({ payment_status: status, transaction_reference: reference || null, updated_at: new Date().toISOString() })
-    .eq('id', paymentId)
-    .select('id, booking_id, payment_status')
-    .single()
+    return NextResponse.json({
+      payment: result.payment,
+      mode: result.mode,
+      reference: paystack.data.reference,
+      authorization_url: paystack.data.authorization_url,
+      message: 'Paystack checkout initialized successfully.',
+    }, { status: 201 })
+  }
 
-  if (error || !payment) return { error: 'Payment record not found.', status: 404 as const }
-
-  const bookingStatus = status === 'paid' ? 'confirmed' : status === 'cancelled' ? 'cancelled' : status === 'failed' ? 'pending' : 'pending'
-  const paymentStatus = status === 'paid' ? 'paid' : status
-
-  const { error: bookingError } = await supabase
-    .from('bookings')
-    .update({ status: bookingStatus, payment_status: paymentStatus, updated_at: new Date().toISOString() })
-    .eq('id', payment.booking_id)
-
-  if (bookingError) return { error: 'Payment was recorded but booking status could not be updated.', status: 500 as const }
-  return { payment, status: 200 as const }
+  return NextResponse.json({
+    payment: result.payment,
+    mode: result.mode,
+    message: result.mode === 'test' ? 'Payment is ready in safe test mode. No money was charged.' : 'Payment started. Complete the payment flow.',
+  }, { status: 201 })
 }
