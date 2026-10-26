@@ -1,87 +1,83 @@
-import { NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabase/admin";
-import { providerEventStatus, type PaymentStatus } from "@/lib/payment-service";
+import { NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
+import { createPendingPayment, type PaymentMethod } from '@/lib/payment-service'
+import { initializePaystackTransaction } from '@/lib/paystack'
 
-function validSignature(rawBody: string, signature: string | null) {
-  const secret = process.env.PAYMENT_WEBHOOK_SECRET;
-  if (!secret || !signature) return false;
-  const expected = require("node:crypto").createHmac("sha256", secret).update(rawBody).digest("hex");
-  const provided = signature.replace(/^sha256=/, "");
-  if (provided.length !== expected.length) return false;
-  return require("node:crypto").timingSafeEqual(Buffer.from(expected), Buffer.from(provided));
-}
+const methods = new Set<PaymentMethod>(['mpesa', 'card', 'bank_transfer', 'other', 'paystack'])
 
 export async function POST(request: Request) {
-  const rawBody = await request.text();
+  const body = await request.json().catch(() => null)
+  const bookingId = body && typeof body.bookingId === 'string' ? body.bookingId : ''
+  const method = body && typeof body.method === 'string' && methods.has(body.method as PaymentMethod) ? body.method as PaymentMethod : null
 
-  if (!validSignature(rawBody, request.headers.get("x-payment-signature"))) {
-    return NextResponse.json({ error: "Invalid webhook signature." }, { status: 401 });
+  if (!bookingId || !method) {
+    return NextResponse.json({ error: 'Choose a valid booking and payment method.' }, { status: 400 })
   }
 
-  let body: { paymentId?: unknown; status?: unknown; reference?: unknown };
-
-  try {
-    body = JSON.parse(rawBody) as { paymentId?: unknown; status?: unknown; reference?: unknown };
-  } catch {
-    return NextResponse.json({ error: "Invalid payment event payload." }, { status: 400 });
+  if (method === 'paystack' && !process.env.PAYSTACK_SECRET_KEY) {
+    return NextResponse.json({ error: 'Paystack is not configured on this server.' }, { status: 500 })
   }
 
-  const paymentId = typeof body.paymentId === "string" ? body.paymentId : "";
-  const status = providerEventStatus(body.status);
-  const reference = typeof body.reference === "string" ? body.reference.slice(0, 120) : undefined;
+  const result = await createPendingPayment({ bookingId, method })
+  if ('error' in result) return NextResponse.json({ error: result.error }, { status: result.status })
 
-  if (!paymentId || !status) {
-    return NextResponse.json({ error: "Invalid payment event." }, { status: 400 });
-  }
+  if (method === 'paystack') {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    const { data: booking } = await supabase
+      .from('bookings')
+      .select('id, total_amount, currency')
+      .eq('id', bookingId)
+      .eq('user_id', user?.id ?? '')
+      .maybeSingle()
 
-  const supabase = createAdminClient();
-  const { data: payment, error: paymentLookupError } = await supabase
-    .from("payment_records")
-    .select("id, booking_id, payment_status")
-    .eq("id", paymentId)
-    .maybeSingle();
-
-  if (paymentLookupError) {
-    return NextResponse.json({ error: "Payment lookup failed." }, { status: 500 });
-  }
-
-  if (!payment) {
-    return NextResponse.json({ error: "Payment not found." }, { status: 404 });
-  }
-
-  if (payment.payment_status === status) {
-    return NextResponse.json({ received: true, paymentId, status: status as PaymentStatus, duplicate: true });
-  }
-
-  const { error: paymentError } = await supabase
-    .from("payment_records")
-    .update({
-      payment_status: status,
-      transaction_reference: reference || null,
-      updated_at: new Date().toISOString(),
+    const amountInKobo = Math.max(1, Math.round((Number(booking?.total_amount ?? result.payment.amount ?? 0) * 100)))
+    const paystack = await initializePaystackTransaction({
+      amount: amountInKobo,
+      email: user?.email ?? 'customer@example.com',
+      reference: `zts-${result.payment.id}`,
+      currency: booking?.currency ?? 'KES',
+      bookingId,
     })
-    .eq("id", paymentId);
 
-  if (paymentError) {
-    return NextResponse.json({ error: "Payment event could not be recorded." }, { status: 500 });
+    if ('error' in paystack) {
+      await supabase.from('payment_records').update({
+        payment_status: 'failed',
+        metadata: {
+          mode: process.env.PAYMENT_MODE === 'live' ? 'live' : 'test',
+          paystack: { error: paystack.error },
+        },
+      }).eq('id', result.payment.id)
+
+      return NextResponse.json({ error: paystack.error }, { status: paystack.status })
+    }
+
+    await supabase.from('payment_records').update({
+      provider: 'paystack',
+      transaction_reference: paystack.data.reference,
+      metadata: {
+        mode: process.env.PAYMENT_MODE === 'live' ? 'live' : 'test',
+        paystack: {
+          access_code: paystack.data.access_code,
+          authorization_url: paystack.data.authorization_url,
+          reference: paystack.data.reference,
+          amount: amountInKobo,
+        },
+      },
+    }).eq('id', result.payment.id)
+
+    return NextResponse.json({
+      payment: result.payment,
+      mode: result.mode,
+      reference: paystack.data.reference,
+      authorization_url: paystack.data.authorization_url,
+      message: 'Paystack checkout initialized successfully.',
+    }, { status: 201 })
   }
 
-  const bookingStatus = status === "paid" ? "confirmed" : status === "cancelled" ? "cancelled" : "pending";
-  const { error: bookingError } = await supabase
-    .from("bookings")
-    .update({
-      status: bookingStatus,
-      payment_status: status,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", payment.booking_id);
-
-  if (bookingError) {
-    return NextResponse.json({ error: "Payment recorded but booking update failed." }, { status: 500 });
-  }
-
-  // ETIMS invoice submission temporarily disabled.
-  // Re-enable in a future update when the integration is ready.
-
-  return NextResponse.json({ received: true, paymentId, status: status as PaymentStatus });
+  return NextResponse.json({
+    payment: result.payment,
+    mode: result.mode,
+    message: result.mode === 'test' ? 'Payment is ready in safe test mode. No money was charged.' : 'Payment started. Complete the payment flow.',
+  }, { status: 201 })
 }
